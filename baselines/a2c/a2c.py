@@ -32,13 +32,15 @@ class Model(object):
         save/load():
         - Save load the model
     """
-    def __init__(self, policy, env, nsteps, icm,
+    def __init__(self, policy, env, nsteps, icm,idf,
             ent_coef=0.01, vf_coef=0.5, max_grad_norm=0.5, lr=7e-4,
             alpha=0.99, epsilon=1e-5, total_timesteps=int(80e6), lrschedule='linear'):
 
         sess = tf_util.get_session()
         nenvs = env.num_envs
         nbatch = nenvs*nsteps
+
+        self.idf=idf
 
         print("This is Icm in Model Init function " , type(icm))
 
@@ -113,8 +115,8 @@ class Model(object):
             # m , s = get_mean_and_std(icm_adv)
 
             # > adv Normaliztion
-            m , s = get_mean_and_std(advs)
-            advs = (advs - m) / (s + 1e-7)
+            # m , s = get_mean_and_std(advs)
+            # advs = (advs - m) / (s + 1e-7)
 
 
 
@@ -146,8 +148,8 @@ class Model(object):
                 td_map = {train_model.X:obs, A:actions, ADV:advs, R:rewards, LR:cur_lr}
             else :
                 # print("curiosity Td Map ")
-                print(" obs {} , next obs {} , actions  {} ".format(np.shape(obs) , np.shape(next_obs),
-                    np.shape(actions)))
+                # print(" obs {} , next obs {} , actions  {} ".format(np.shape(obs) , np.shape(next_obs),
+                    # np.shape(actions)))
                 td_map = {train_model.X:obs, A:actions, ADV:advs, R:rewards, LR:cur_lr , 
                 icm.state_:obs, icm.next_state_ : next_obs , icm.action_ : actions }# , icm.R :rewards }
 
@@ -167,12 +169,19 @@ class Model(object):
                 if states is not None:
                     td_map[train_model.S] = states
                     td_map[train_model.M] = masks
-                policy_loss, value_loss, policy_entropy,forward_loss , inverse_loss , icm_loss, _ = sess.run(
-                    [pg_loss, vf_loss, entropy, icm.forw_loss , icm.inv_loss, icm.icm_loss ,_train],
-                    td_map
+                if self.idf :    
+                    policy_loss, value_loss, policy_entropy,forward_loss , inverse_loss , icm_loss, _ = sess.run(
+                        [pg_loss, vf_loss, entropy, icm.forw_loss , icm.inv_loss, icm.icm_loss ,_train],
+                        td_map)
+                    return policy_loss, value_loss, policy_entropy,forward_loss , inverse_loss , icm_loss, advs
 
-                )
-                return policy_loss, value_loss, policy_entropy,forward_loss , inverse_loss , icm_loss, advs
+                else :
+                    policy_loss, value_loss, policy_entropy,forward_loss , icm_loss, _ = sess.run(
+                        [pg_loss, vf_loss, entropy, icm.forw_loss , icm.icm_loss ,_train],
+                        td_map)
+
+                    return policy_loss, value_loss, policy_entropy,forward_loss , 0.0 , icm_loss, advs
+
 
 
 
@@ -204,6 +213,7 @@ def learn(
     gamma=0.99,
     log_interval=100,
     load_path=None,
+    idf = True,
     **network_kwargs):
 
     '''
@@ -273,16 +283,15 @@ def learn(
 
     # Instantiate the model object (that creates step_model and train_model)
     if curiosity == False :
-        model = Model(policy=policy, env=env, nsteps=nsteps, icm=None ,ent_coef=ent_coef, vf_coef=vf_coef,
+        model = Model(policy=policy, env=env, nsteps=nsteps, icm=None , idf = None,ent_coef=ent_coef, vf_coef=vf_coef,
             max_grad_norm=max_grad_norm, lr=lr, alpha=alpha, epsilon=epsilon, total_timesteps=total_timesteps, lrschedule=lrschedule)
     else :
         print("Called curiosity model")
-        make_icm = lambda: ICM(ob_space = temp_ob_space, ac_space = temp_ac_space, max_grad_norm = max_grad_norm, beta = 0.2, icm_lr_scale = 0.1 )
+        make_icm = lambda: ICM(ob_space = temp_ob_space, ac_space = temp_ac_space, max_grad_norm = max_grad_norm, beta = 0.2, icm_lr_scale = 0.1 , idf = idf )
         icm = make_icm()
 
         model = Model(policy=policy, env=env, nsteps=nsteps, icm=icm , ent_coef=ent_coef, vf_coef=vf_coef,
-            max_grad_norm=max_grad_norm, lr=lr, alpha=alpha, epsilon=epsilon, total_timesteps=total_timesteps, lrschedule=lrschedule)
-
+            max_grad_norm=max_grad_norm, lr=lr, alpha=alpha, epsilon=epsilon, total_timesteps=total_timesteps, lrschedule=lrschedule , idf = idf )
         
 
 
@@ -338,7 +347,7 @@ def learn(
             logger.record_tabular("policy_entropy", float(policy_entropy))
             logger.record_tabular("value_loss", float(value_loss))
             if curiosity == True :
-                # logger.record_tabular("forwardLoss", float(forwardLoss))
+                logger.record_tabular("forwardLoss", float(forwardLoss))
                 # logger.record_tabular("inverseLoss", float(inverseLoss))
                 logger.record_tabular("icm Loss", float(icm_loss))
                 logger.record_tabular("Advantage" , np.mean(advs))
